@@ -10501,7 +10501,7 @@ void coli_v4_gpu_mirror_stats(ColiExpertStore *store, unsigned long long out[4])
     out[0] = out[1] = out[2] = out[3] = 0;
     if (!store || !store->gpu) return;
     V4GpuExpertMirrorCache *c = (V4GpuExpertMirrorCache *)store->gpu;
-    out[0] = c->l1_hits; out[1] = c->l2_hits; out[2] = c->l2_stores;
+    out[0] = c->l1_hits; out[1] = c->l2_hits; out[2] = c->l2 ? c->l2->l2_stores : 0;
     out[3] = (unsigned long long)c->count + (c->l2 ? (unsigned long long)c->l2->count : 0);
 }
 
