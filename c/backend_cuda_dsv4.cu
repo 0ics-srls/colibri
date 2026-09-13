@@ -1273,6 +1273,28 @@ static int upload(Dsv4CudaTensor **pt,const void *w,size_t wb,const uint8_t *sc,
         if(!ok(cudaGetLastError(),"dense DeepGEMM scale packing")){dsv4_cuda_tensor_free(t);return 0;}t->bytes+=db;}
 #endif
     *pt=t;return 1;}
+/* Second-tier (peer GPU) expert mirrors, #volta-l2: a same-shape fp4 tensor
+ * allocated WITHOUT a host upload, and a device-to-device copy between two
+ * mirrors that may live on different cards. The copy is enqueued on the
+ * stream of `stream_device` so it orders against that device's later work
+ * (a refill or an expert group on the same stream). Peer access, when the
+ * bus allows it, is enabled once in dsv4_cuda_init; cudaMemcpyPeerAsync
+ * falls back to a staged copy otherwise. */
+extern "C" int dsv4_cuda_tensor_alloc_fp4(Dsv4CudaTensor **pt,int O,int I,int d){
+    if(!pt)return 0;if(*pt)return 1;Dev*c=ctx(d);if(!c||!ok(cudaSetDevice(d),"select alloc device"))return 0;
+    size_t wb=(size_t)O*I/2,sb=(size_t)O*I/32;
+    Dsv4CudaTensor*t=(Dsv4CudaTensor*)calloc(1,sizeof(*t));t->O=O;t->I=I;t->device=d;t->fmt=4;t->bytes=wb+sb;
+    if(!ok(cudaMalloc(&t->w,wb),"mirror weight allocation")){dsv4_cuda_tensor_free(t);return 0;}t->own_w=1;
+    if(!ok(cudaMalloc(&t->scale,sb),"mirror scale allocation")){dsv4_cuda_tensor_free(t);return 0;}t->own_scale=1;
+    *pt=t;return 1;}
+extern "C" int dsv4_cuda_tensor_copy_fp4(Dsv4CudaTensor *dst,const Dsv4CudaTensor *src,int stream_device,int sync){
+    if(!dst||!src||dst->fmt!=4||src->fmt!=4||dst->O!=src->O||dst->I!=src->I||!dst->w||!src->w||!dst->scale||!src->scale)return 0;
+    Dev*c=ctx(stream_device);if(!c||!ok(cudaSetDevice(stream_device),"select peer copy device"))return 0;
+    size_t wb=(size_t)dst->O*dst->I/2,sb=(size_t)dst->O*dst->I/32;
+    if(!ok(cudaMemcpyPeerAsync(dst->w,dst->device,src->w,src->device,wb,c->stream),"peer weight copy")||
+       !ok(cudaMemcpyPeerAsync(dst->scale,dst->device,src->scale,src->device,sb,c->stream),"peer scale copy"))return 0;
+    if(sync&&!ok(cudaStreamSynchronize(c->stream),"peer copy drain"))return 0;
+    return 1;}
 extern "C" int dsv4_cuda_upload_fp8(Dsv4CudaTensor **t,const uint8_t*w,const uint8_t*s,int O,int I,int d){return upload(t,w,(size_t)O*I,s,(size_t)((O+127)/128)*((I+127)/128),O,I,d,8);}
 extern "C" int dsv4_cuda_upload_fp8_bf16(Dsv4CudaTensor **t,const uint8_t*w,const uint8_t*s,int O,int I,int d){return upload(t,w,(size_t)O*I,s,(size_t)((O+127)/128)*((I+127)/128),O,I,d,9);}
 extern "C" int dsv4_cuda_upload_fp4(Dsv4CudaTensor **t,const uint8_t*w,const uint8_t*s,int O,int I,int d){if(!upload(t,w,(size_t)O*I/2,s,(size_t)O*I/32,O,I,d,4))return 0;
