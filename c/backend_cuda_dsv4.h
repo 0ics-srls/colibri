@@ -22,6 +22,7 @@ int dsv4_cuda_upload_bf16(Dsv4CudaTensor **t,const uint16_t *w,int O,int I,int d
 /* Same-shape in-place refill of an fp4 mirror (no realloc); sync=1 drains. */
 int dsv4_cuda_tensor_refill_fp4(Dsv4CudaTensor *t,const uint8_t *w,const uint8_t *scale,int O,int I,int sync);
 int dsv4_cuda_tensor_alloc_fp4(Dsv4CudaTensor **t,int O,int I,int device);
+int dsv4_cuda_tensor_alloc_like(Dsv4CudaTensor **t,const Dsv4CudaTensor *like,int device);
 int dsv4_cuda_tensor_copy_fp4(Dsv4CudaTensor *dst,const Dsv4CudaTensor *src,int stream_device,int sync);
 int dsv4_cuda_upload_f32(Dsv4CudaTensor **t,const float *w,int O,int I,int device);
 int dsv4_cuda_matvec(Dsv4CudaTensor *t,float *y,const float *x);

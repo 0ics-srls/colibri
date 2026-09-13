@@ -1287,6 +1287,8 @@ extern "C" int dsv4_cuda_tensor_alloc_fp4(Dsv4CudaTensor **pt,int O,int I,int d)
     if(!ok(cudaMalloc(&t->w,wb),"mirror weight allocation")){dsv4_cuda_tensor_free(t);return 0;}t->own_w=1;
     if(!ok(cudaMalloc(&t->scale,sb),"mirror scale allocation")){dsv4_cuda_tensor_free(t);return 0;}t->own_scale=1;
     *pt=t;return 1;}
+extern "C" int dsv4_cuda_tensor_alloc_like(Dsv4CudaTensor **pt,const Dsv4CudaTensor *like,int d){
+    if(!like||like->fmt!=4)return 0;return dsv4_cuda_tensor_alloc_fp4(pt,like->O,like->I,d);}
 extern "C" int dsv4_cuda_tensor_copy_fp4(Dsv4CudaTensor *dst,const Dsv4CudaTensor *src,int stream_device,int sync){
     if(!dst||!src||dst->fmt!=4||src->fmt!=4||dst->O!=src->O||dst->I!=src->I||!dst->w||!src->w||!dst->scale||!src->scale)return 0;
     Dev*c=ctx(stream_device);if(!c||!ok(cudaSetDevice(stream_device),"select peer copy device"))return 0;

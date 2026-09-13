@@ -9769,6 +9769,9 @@ static V4GpuExpertMirrorCache *v4_gpu_expert_mirrors_create(int device,
 static void v4_gpu_expert_mirrors_free(V4GpuExpertMirrorCache *cache);
 static int v4_gpu_expert_attach_cached_ex(V4GpuExpertMirrorCache *cache,
                                           ColiExpertView *view, int sync);
+static void v4_gpu_expert_mirrors_set_l2(V4GpuExpertMirrorCache *l1,
+                                         V4GpuExpertMirrorCache *l2);
+static void v4_gpu_expert_mirrors_free_all(V4GpuExpertMirrorCache *l1);
 
 int coli_v4_gpu_engine_open(ColiV4Engine *engine) {
     if (!engine) return -1;
@@ -9824,7 +9827,8 @@ int coli_v4_gpu_engine_open(ColiV4Engine *engine) {
         if (l2_cap < 8) l2_cap = 8;
         V4GpuExpertMirrorCache *l2 =
             v4_gpu_expert_mirrors_create_capacity(device2, l2_cap);
-        ((V4GpuExpertMirrorCache *)engine->experts->gpu)->l2 = l2;
+        v4_gpu_expert_mirrors_set_l2(
+            (V4GpuExpertMirrorCache *)engine->experts->gpu, l2);
         fprintf(stderr, "v4_gpu l2-mirrors device=%d cap=%d (victim tier, "
                         "peer copy)\n", device2, l2_cap);
     }
@@ -9846,9 +9850,8 @@ void coli_v4_gpu_engine_close(ColiV4Engine *engine) {
         engine->gpu.layer_ready[layer] = 0;
     }
     if (engine->experts && engine->experts->gpu) {
-        V4GpuExpertMirrorCache *l1 = (V4GpuExpertMirrorCache *)engine->experts->gpu;
-        if (l1->l2) { v4_gpu_expert_mirrors_free(l1->l2); l1->l2 = NULL; }
-        v4_gpu_expert_mirrors_free(l1);
+        v4_gpu_expert_mirrors_free_all(
+            (V4GpuExpertMirrorCache *)engine->experts->gpu);
         engine->experts->gpu = NULL;
     }
     if (engine->gpu.dspark_mirrors) {
@@ -10310,6 +10313,16 @@ static V4GpuExpertMirrorCache *v4_gpu_expert_mirrors_create(int device,
     return v4_gpu_expert_mirrors_create_capacity(device, capacity);
 }
 
+static void v4_gpu_expert_mirrors_set_l2(V4GpuExpertMirrorCache *l1,
+                                         V4GpuExpertMirrorCache *l2) {
+    if (l1) l1->l2 = l2;
+}
+static void v4_gpu_expert_mirrors_free(V4GpuExpertMirrorCache *cache);
+static void v4_gpu_expert_mirrors_free_all(V4GpuExpertMirrorCache *l1) {
+    if (!l1) return;
+    if (l1->l2) { v4_gpu_expert_mirrors_free(l1->l2); l1->l2 = NULL; }
+    v4_gpu_expert_mirrors_free(l1);
+}
 static void v4_gpu_expert_mirrors_free(V4GpuExpertMirrorCache *cache) {
     if (!cache) return;
     for (int i = 0; i < cache->count; i++) {
@@ -10360,9 +10373,9 @@ static int v4_mirror_may_grow(V4GpuExpertMirrorCache *cache) {
 }
 static int v4_mirror_alloc_like(V4GpuExpertMirror *e, const V4GpuExpertMirror *like, int device) {
     memset(e, 0, sizeof(*e));
-    if (dsv4_cuda_tensor_alloc_fp4(&e->gate, like->gate->O, like->gate->I, device) &&
-        dsv4_cuda_tensor_alloc_fp4(&e->up, like->up->O, like->up->I, device) &&
-        dsv4_cuda_tensor_alloc_fp4(&e->down, like->down->O, like->down->I, device))
+    if (dsv4_cuda_tensor_alloc_like(&e->gate, like->gate, device) &&
+        dsv4_cuda_tensor_alloc_like(&e->up, like->up, device) &&
+        dsv4_cuda_tensor_alloc_like(&e->down, like->down, device))
         return 1;
     if (e->gate) dsv4_cuda_tensor_free(e->gate);
     if (e->up) dsv4_cuda_tensor_free(e->up);
