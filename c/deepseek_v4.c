@@ -4835,6 +4835,14 @@ static int v4_gpu_first_enabled(void) {
     return on;
 }
 int coli_v4_gpu_expert_resident(ColiExpertStore *store, ColiExpertView *view);
+static int v4_ram_exclusive_enabled(void) {
+    static int on = -1;
+    if (on < 0) {
+        const char *setting = getenv("DSV4_RAM_EXCLUSIVE");
+        on = setting ? atoi(setting) != 0 : 1;
+    }
+    return on;
+}
 int coli_v4_hybrid_enabled(void) {
     static int on = -1;
     if (on < 0) {
@@ -5323,6 +5331,16 @@ static int moe_token_pipeline(float *output,
 #endif
     for (int current = 0; current < selected; current++) {
         if (resident && resident[current]) { memset(&views[current], 0, sizeof(views[current])); continue; }
+#ifdef COLI_V4_GPU_TIER
+        /* #volta-l2: this expert came from the disk and now lives in VRAM:
+         * let the RAM forget it first (exclusive caches, DSV4_RAM_EXCLUSIVE=0
+         * keeps the old inclusive behaviour). */
+        if (store->gpu && v4_ram_exclusive_enabled() &&
+            views[current].gate.gpu && views[current].up.gpu && views[current].down.gpu) {
+            extern void coli_v4_expert_demote(ColiExpertStore *, ColiExpertView *);
+            coli_v4_expert_demote(store, &views[current]);
+        }
+#endif
         coli_expert_release(store, &views[current]);
     }
     free(views);
@@ -7808,6 +7826,45 @@ static void release(ColiExpertStore *store, ColiExpertView *view) {
     if (state->active_leases) state->active_leases--;
     pthread_mutex_unlock(&state->mutex);
     memset(view, 0, sizeof(*view));
+}
+
+/* #volta-l2 EXCLUSIVE RAM: an expert that has just been mirrored to VRAM is
+ * demoted to the head of its partition's LRU, i.e. it is the first slot the
+ * next RAM miss recycles. Without this the RAM cache and the VRAM mirrors
+ * hold the SAME hot set (measured: RAM hit rate 7-8 % once the GPU-first
+ * lookup serves 82-90 % of the requests), so the two caches duplicate
+ * instead of adding up. Must be called while the lease is still held. */
+int coli_v4_expert_store_is_v4(const ColiExpertStore *store) {
+    return store && store->ops && store->ops->release == release;
+}
+void coli_v4_expert_demote(ColiExpertStore *store, ColiExpertView *view) {
+    if (!store || !store->state || !view || !view->lease) return;
+    if (!coli_v4_expert_store_is_v4(store)) return;
+    V4ExpertStoreState *state = store->state;
+    V4ExpertSlot *slot = view->lease;
+    pthread_mutex_lock(&state->mutex);
+    if (slot->in_lru && slot->references <= 1) {
+        int index = (int)(slot - state->slots);
+        int partition = slot_partition(state, slot);
+        /* unlink */
+        if (slot->lru_previous >= 0)
+            state->slots[slot->lru_previous].lru_next = slot->lru_next;
+        else
+            state->lru_head[partition] = slot->lru_next;
+        if (slot->lru_next >= 0)
+            state->slots[slot->lru_next].lru_previous = slot->lru_previous;
+        else
+            state->lru_tail[partition] = slot->lru_previous;
+        /* insert at head */
+        slot->lru_previous = -1;
+        slot->lru_next = state->lru_head[partition];
+        if (state->lru_head[partition] >= 0)
+            state->slots[state->lru_head[partition]].lru_previous = index;
+        else
+            state->lru_tail[partition] = index;
+        state->lru_head[partition] = index;
+    }
+    pthread_mutex_unlock(&state->mutex);
 }
 
 static int prefetch(ColiExpertStore *store, const ColiExpertKey *keys,
